@@ -115,9 +115,77 @@ void *ag_alloc(size_t size)
     if (heap_start == NULL)
         ag_init();
 
-    // TODO 2.3. Implement this function
+    // return NULL if sizes are out of bounds,
+    // includes blocks with sizes that are less than one
+    if (size < 1 || size > PAGE_SIZE)
+        return NULL;
 
-    return NULL;
+    // keep track of smallest block that is free and its size
+    BlockHeader *smallest_block = NULL;
+    BlockHeader smallest_size = 0;
+
+    // keep track of current block that we are checking and the size that we are looking for
+    // 4 header bytes, the payload, and round up to a multiple of 16
+    BlockHeader *curr_block = first_block;
+    // ensure that every block's payload is aligned to a 16 byte boundary by only allocating bloc>
+    BlockHeader size_needed = (BlockHeader)((4 + size + (ALIGNMENT - 1)) & ~(size_t)(ALIGNMENT - 1));
+
+    // use best-fit placement policy to find a free block to use for new allocation - check a-bit>
+    // while the current block is not the end of memory / the epilogue
+    while ((*curr_block & 0x3) != 0)
+    {
+        // if the current block is free and big enough
+        if (!(*curr_block & 0x1) && ((*curr_block & 0x3) >= size_needed))
+        {
+            // if we haven't found a block or the current size we just found is less than t>
+            if (smallest_block == NULL || (*curr_block & 0x3) < smallest_size)
+            {
+                smallest_block = curr_block;
+                smallest_size = (*curr_block & 0x3);
+            }
+            // if we found a perfect fit, we're done (already set it ^^)
+            if ((*curr_block & 0x3) == size_needed)
+                break;
+        }
+
+        curr_block = (BlockHeader *)((char *)curr_block + (*curr_block & 0x3));
+    }
+
+    // return NULL when no available block with the needed size can be allocated,
+    // if we did not find a suitable block, return NULL
+    if (smallest_block == NULL)
+        return NULL;
+
+    // split oversize blocks, when a perfect sized one is not available
+    // leftover bytes after we allocated above ^^
+    BlockHeader leftover = smallest_size - size_needed;
+
+    if (leftover > 0)
+    {
+        // update the header for the affected block
+        // setting the block as allocated
+        *smallest_block = size_needed | (*smallest_block & 0x2) | 0x1;
+
+        BlockHeader *leftover_block = (BlockHeader *)((char *)smallest_block + size_needed);
+        *leftover_block = leftover | 0x2;
+
+        // maintain footers only inside of unallocated blocks, so these must be updated in the >
+        BlockHeader *footer = (BlockHeader *)((char *)leftover_block + leftover - 4);
+        *footer = leftover;
+    }
+    // else, our perfect fit
+    else
+    {
+        // mark our block as allocated
+        *smallest_block = smallest_size | (*smallest_block & 0x2) | 0x1;
+
+        // set the next block's p-bit to 1 to signal previous ^^ block's allocation
+        BlockHeader *next_block = (BlockHeader *)((char *)smallest_block + smallest_size);
+        *next_block = *next_block | 0x2;
+    }
+
+    // return the payload
+    return (char *)smallest_block + 4;
 }
 
 /*
@@ -127,8 +195,33 @@ void *ag_alloc(size_t size)
  */
 int ag_free(void *ptr)
 {
-    // TODO 2.4 Implement this function
+    // return an error code of 1 if the ptr argument is not within range of 4096 bytes
+    if (ptr == NULL || (char *)ptr < (char *)heap_start + 16 || (char *)ptr >= (char *)heap_brk - 4)
+        return 1;
 
+    // update the headers for all affected blocks
+    BlockHeader *header = (BlockHeader *)((char *)ptr - 4);
+
+    // return an error code of 2 if the ptr argument refers to a block that is not allocated and already free
+    if (!(*header & 0x1))
+        return 2;
+
+    // mark the block as free
+    *header = *header & ~0x1;
+
+    // footer of free block set to the size
+    BlockHeader *footer = (BlockHeader *)(char *)header + (*header & ~0x3) - 4;
+    *footer = (*header & ~0x3);
+
+    // have to set the block after allocated block's p-bit to free
+    BlockHeader *next_block = (BlockHeader *)((char *)header + (*header & ~0x3));
+    *next_block = *next_block & ~0x2;
+
+    // call ag_coalesce() helper function after successfully updating the affect block headers
+    // should pass the block header for the newly free block as the argument
+    ag_coalesce(header);
+
+    // return 0 when the block corresponding to the provided payload pointer is successfully freed
     return 0;
 }
 
@@ -139,5 +232,10 @@ int ag_free(void *ptr)
  */
 void ag_coalesce(BlockHeader *header)
 {
-    // TODO 2.5 Implement this function
+    // must check whether the previous and next blocks are allocated vs free
+    // and when either or both of these neighboring blocks are free, this func should
+    // combine these blocks by updating relevant headers and footers.
+
+    // since this coalescing is done with each free-operation, do not need to check more
+    // than one block before and after the block that is currently being freed
 }
